@@ -1,51 +1,60 @@
-from fastapi import FastAPI, Depends
-from sqlalchemy.orm import Session
-from database.database import get_db, Base, engine
-from schemas.item import Item, ItemCreate, ItemUpdate
-from services.item_service import ItemService
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional
+from supabase import create_client, Client
+import os
+from dotenv import load_dotenv
 
-Base.metadata.create_all(bind=engine)
+# Cargar variables de entorno desde .env
+load_dotenv()
 
+# Credenciales de Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# Crear cliente de Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Crear instancia de FastAPI
 app = FastAPI()
 
+# Modelo Pydantic
+class Item(BaseModel):
+    id: Optional[int]
+    name: str
+    description: Optional[str] = None
+
+# Ruta de bienvenida
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Hello from Supabase backend"}
 
+# Obtener todos los items
+@app.get("/items/", response_model=List[Item])
+def read_items():
+    response = supabase.table("items").select("*").execute()
+    return response.data
+
+# Obtener un item por ID
 @app.get("/items/{item_id}", response_model=Item)
-def read_item(item_id: int, db: Session = Depends(get_db)):
-    item_service = ItemService(db)
-    db_item = item_service.get_item(item_id)
-    if db_item is None:
-        # Puedes personalizar la excepción
+def read_item(item_id: int):
+    response = supabase.table("items").select("*").eq("id", item_id).single().execute()
+    if not response.data:
         raise HTTPException(status_code=404, detail="Item not found")
-    return db_item
+    return response.data
 
-@app.get("/items/", response_model=list[Item])
-def read_items(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    item_service = ItemService(db)
-    items = item_service.get_items(skip=skip, limit=limit)
-    return items
-
+# Crear un nuevo item
 @app.post("/items/", response_model=Item)
-def create_item(item: ItemCreate, db: Session = Depends(get_db)):
-    item_service = ItemService(db)
-    return item_service.create_item(item)
+def create_item(item: Item):
+    response = supabase.table("items").insert(item.dict(exclude_unset=True)).execute()
+    if response.status_code != 201:
+        raise HTTPException(status_code=500, detail="Error creating item")
+    return response.data[0]
 
+# Actualizar un item existente
 @app.put("/items/{item_id}", response_model=Item)
-def update_item(item_id: int, item: ItemUpdate, db: Session = Depends(get_db)):
-    item_service = ItemService(db)
-    updated_item = item_service.update_item(item_id, item)
-    if updated_item is None:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return updated_item
-
-@app.delete("/items/{item_id}", response_model=dict)
-def delete_item(item_id: int, db: Session = Depends(get_db)):
-    item_service = ItemService(db)
-    if item_service.delete_item(item_id):
-        return {"message": "Item deleted successfully"}
-    else:
-        raise HTTPException(status_code=404, detail="Item not found")
-
-from fastapi import HTTPException # Importa HTTPException aquí
+def update_item(item_id: int, item: Item):
+    response = supabase.table("items").update(item.dict(exclude_unset=True)).eq("id", item_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Item not found or not updated")
+    return response.data[0]
